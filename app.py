@@ -45,17 +45,14 @@ PERIODOS = ["2022T1","2022T2","2022T3","2022T4","2023T1","2023T2","2023T3","2023
             "2024T1","2024T2","2024T3","2024T4","2025T1","2025T2","2025T3"]
 TASA = [7.53,7.29,6.41,6.99,7.02,6.87,6.84,9.69,7.57,7.87,7.54,7.15,8.05,7.99,7.57]
 
-# Curvas ROC (test set, calculadas en Colab)
 FPR = [0.0,0.012,0.027,0.046,0.067,0.094,0.126,0.154,0.185,0.22,0.269,0.314,0.371,0.434,0.504,0.57,0.622,0.672,0.721,0.774,0.821,0.865,0.909,0.955,1.0]
 TPR = [0.0,0.093,0.18,0.252,0.325,0.399,0.465,0.525,0.584,0.646,0.694,0.747,0.794,0.837,0.86,0.889,0.914,0.928,0.943,0.958,0.965,0.977,0.986,0.992,1.0]
 FPR_RF = [0.0,0.012,0.029,0.047,0.072,0.09,0.12,0.152,0.189,0.224,0.267,0.314,0.377,0.453,0.511,0.573,0.63,0.676,0.72,0.773,0.822,0.868,0.918,0.961,1.0]
 TPR_RF = [0.0,0.101,0.172,0.24,0.32,0.387,0.45,0.519,0.579,0.64,0.69,0.744,0.787,0.829,0.861,0.891,0.917,0.933,0.947,0.963,0.973,0.981,0.985,0.994,1.0]
 
-# AME por region (pp) y significancia, para las barras
 REGION_AME = [("GBA (ref.)", 0.0, True), ("NOA", -0.79, True), ("NEA", -0.18, False),
               ("Cuyo", -0.37, False), ("Pampeana", -0.83, True), ("Patagonia", -1.90, True)]
 
-# Tabla de AME completa: (variable, categoria, efecto_pp, significativo)
 TABLA_AME = [
     ("Genero", "Mujer (vs varon)", 1.80, True),
     ("Edad", "Por cada ano", -0.23, True),
@@ -79,9 +76,12 @@ TABLA_AME = [
 def color_riesgo(cat):
     return {"Bajo": VERDE, "Moderado": "#c9a227", "Alto": "#cc6a1f", "Muy alto": ROJO}.get(cat, AZUL)
 
-if "model" not in st.session_state:
-    st.session_state.model = LaborModel("modelo_app.joblib")
-model = st.session_state.model
+# CORRECCIÓN: Usamos cache_resource para cargar el modelo de ML (mejor práctica en Streamlit)
+@st.cache_resource
+def load_model():
+    return LaborModel("modelo_app.joblib")
+
+model = load_model()
 
 def evaluar_perfil(sexo, edad, nivel, region, tam, antig):
     return model.predict(mujer=1 if sexo == "Mujer" else 0, edad=edad,
@@ -119,7 +119,9 @@ tab1, tab2, tab3, tab4 = st.tabs(
 with tab1:
     if evaluar:
         r = evaluar_perfil(sexo_lbl, edad, nivel_lbl, region_lbl, tam_lbl, antig_lbl)
-        color = color_riesgo(r["categoria"]); de_cada_100 = round(r["probabilidad"])
+        color = color_riesgo(r["categoria"])
+        de_cada_100 = round(r["probabilidad"])
+        
         m1, m2, m3 = st.columns(3)
         with m1:
             st.markdown(f"""<div class="metric-card"><div class="metric-label">Prob. de caida</div>
@@ -131,6 +133,7 @@ with tab1:
             st.markdown(f"""<div class="metric-card"><div class="metric-label">De cada 100 perfiles</div>
                 <div class="metric-value" style="color:{color};">{de_cada_100}</div></div>""", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
+        
         col1, col2 = st.columns([1, 1])
         with col1:
             fig = go.Figure(go.Indicator(mode="gauge+number", value=r["probabilidad"],
@@ -141,16 +144,26 @@ with tab1:
                                  {"range": [10, 18], "color": "#f7ebe0"}, {"range": [18, 30], "color": "#f7e5e8"}]}))
             fig.update_layout(paper_bgcolor="#f7f8fa", font_color="#2a3645", height=300, margin=dict(t=30, b=10, l=40, r=40))
             st.plotly_chart(fig, use_container_width=True)
+        
         with col2:
             st.markdown("#### Factores del perfil")
             st.caption("Efecto en puntos porcentuales (pp), respecto de la categoria de referencia. "
                        "En gris: no significativos (p > 0.05).")
-            for etiqueta, pp, sig in r["factores"]:
-                flecha, col_efecto = ("^", ROJO) if pp > 0 else ("v", VERDE)
-                if not sig: col_efecto = GRIS
-                signo = "+" if pp > 0 else ""; marca = "" if sig else "  (n.s.)"
-                st.markdown(f"<div class='factor-row'><span class='factor-pp' style='color:{col_efecto};'>"
-                            f"{flecha} {signo}{pp:.1f} pp</span>&nbsp;&nbsp;{etiqueta}{marca}</div>", unsafe_allow_html=True)
+            
+            # CORRECCIÓN: Bucle seguro (Defensive programming) para evitar el ValueError
+            for factor in r.get("factores", []):
+                # Validamos que el factor tenga el tamaño esperado antes de intentar desempaquetarlo
+                if len(factor) >= 3:
+                    etiqueta = factor[0]
+                    pp = factor[1]
+                    sig = factor[2]
+                    
+                    flecha, col_efecto = ("^", ROJO) if pp > 0 else ("v", VERDE)
+                    if not sig: col_efecto = GRIS
+                    signo = "+" if pp > 0 else ""
+                    marca = "" if sig else "  (n.s.)"
+                    st.markdown(f"<div class='factor-row'><span class='factor-pp' style='color:{col_efecto};'>"
+                                f"{flecha} {signo}{pp:.1f} pp</span>&nbsp;&nbsp;{etiqueta}{marca}</div>", unsafe_allow_html=True)
     else:
         st.info("Completa el perfil en el panel izquierdo y hace clic en EVALUAR RIESGO.")
 
